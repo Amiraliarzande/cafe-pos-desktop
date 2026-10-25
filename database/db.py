@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from database.models.warehouse.unit_measurement import (
@@ -65,6 +65,26 @@ def _normalize_database_url(db_url=None):
     return f"sqlite:///{absolute_path.as_posix()}"
 
 
+def _ensure_schema_updates(engine):
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+
+    with engine.connect() as conn:
+        # ۱. اضافه کردن description به جدول menu_items (حل مشکل اصلی)
+        if "menu_items" in existing_tables:
+            menu_cols = [c["name"] for c in inspector.get_columns("menu_items")]
+            if "description" not in menu_cols:
+                conn.execute(text("ALTER TABLE menu_items ADD COLUMN description VARCHAR(500);"))
+                conn.commit()
+
+        # ۲. بررسی جدول recipe_items در صورت نیاز
+        if "recipe_items" in existing_tables:
+            recipe_cols = [c["name"] for c in inspector.get_columns("recipe_items")]
+            if "description" not in recipe_cols:
+                conn.execute(text("ALTER TABLE recipe_items ADD COLUMN description VARCHAR(500);"))
+                conn.commit()
+
+
 def init_db(db_url=None):
 
     normalized_url = _normalize_database_url(db_url)
@@ -89,6 +109,8 @@ def init_db(db_url=None):
         )
 
         Base.metadata.create_all(engine)
+
+        _ensure_schema_updates(engine)
 
     session_factory = _SESSION_FACTORY_CACHE[normalized_url]
 

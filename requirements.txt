@@ -1,19 +1,21 @@
-# GUI - Desktop Application
-PySide6==6.10.1
-
-# Backend - Database ORM
-SQLAlchemy==2.0.55
-
-# Persian Date and Time
+appdirs==1.4.4
+argcomplete==3.7.2
+et_xmlfile==2.0.0
+greenlet==3.5.6
+importlib_resources==7.1.0
+jalali_core==1.0.0
 jdatetime==6.1.1
-
-# Image Processing
-Pillow==12.3.0
-
-# Receipt and Barcode Printing
-python-escpos==3.1
+openpyxl==3.1.5
+pillow==12.3.0
+PySide6==6.10.1
+PySide6_Addons==6.10.1
+PySide6_Essentials==6.10.1
 python-barcode==0.16.1
-qrcode==8.2
-
-# Configuration Files
+python-escpos==3.1
 PyYAML==6.0.3
+qrcode==8.2
+setuptools==84.2.1
+shiboken6==6.10.1
+six==1.17.0
+SQLAlchemy==2.0.55
+typing_extensions==4.16.0

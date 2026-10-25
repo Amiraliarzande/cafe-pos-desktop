@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -372,6 +373,19 @@ class ReportsPage(QWidget):
         heading.addLayout(title_box)
         heading.addStretch()
 
+        # دکمه خروجی اکسل
+        self.export_button = QPushButton("⬇ خروجی اکسل")
+        self.export_button.setObjectName("exportButton")
+        self.export_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.export_button.setMinimumHeight(38)
+        self.export_button.setToolTip(
+            "در صورت انتخاب یک یا چند فاکتور، همان‌ها خروجی گرفته می‌شوند؛\n"
+            "در غیر این صورت از کل فاکتورهای فیلترشده خروجی تهیه می‌شود."
+        )
+        self.export_button.clicked.connect(self.export_to_excel)
+        heading.addWidget(self.export_button)
+
+        # دکمه به‌روزرسانی
         self.refresh_button = QPushButton("↻ به‌روزرسانی")
         self.refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_button.setObjectName("primaryButton")
@@ -486,7 +500,8 @@ class ReportsPage(QWidget):
         self.reports_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.reports_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.reports_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.reports_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # پشتیبانی از انتخاب چند فاکتور هم‌زمان با Ctrl و Shift
+        self.reports_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.reports_table.setAlternatingRowColors(True)
         self.reports_table.setShowGrid(False)
         self.reports_table.verticalHeader().setVisible(False)
@@ -504,9 +519,9 @@ class ReportsPage(QWidget):
         self.reports_table.cellDoubleClicked.connect(self.open_selected_order)
         table_layout.addWidget(self.reports_table, 1)
 
-        # فوتر جدول: دکمه جزئیات
+        # فوتر جدول: راهنما و دکمه جزئیات
         table_footer = QHBoxLayout()
-        hint = QLabel("💡 برای مشاهده ریزاقلام فاکتور، می‌توانید روی ردیف آن دوبار کلیک کنید.")
+        hint = QLabel("💡 با نگه داشتن کلید Ctrl یا Shift می‌توانید چند فاکتور را انتخاب کرده و خروجی بگیرید. برای مشاهده ریزاقلام، روی ردیف دوبار کلیک کنید.")
         hint.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
         table_footer.addWidget(hint)
         table_footer.addStretch()
@@ -570,6 +585,23 @@ class ReportsPage(QWidget):
             }}
             QPushButton#primaryButton:hover {{
                 background: {GREEN_DARK};
+            }}
+            QPushButton#exportButton {{
+                background: {GREEN_LIGHT};
+                color: {GREEN};
+                border: 1px solid #BFD9C7;
+                border-radius: 8px;
+                padding: 6px 16px;
+                font-weight: 700;
+            }}
+            QPushButton#exportButton:hover {{
+                background: #DCEEE2;
+                border-color: #93BDA2;
+            }}
+            QPushButton#exportButton:disabled {{
+                background: #F1F5F2;
+                color: #94A39A;
+                border-color: #E2E8E4;
             }}
             QTableWidget {{
                 background: {WHITE};
@@ -738,6 +770,193 @@ class ReportsPage(QWidget):
             self.reports_table.setCellWidget(row, 6, badge)
 
         self.result_count.setText(f"{format_number(len(orders))} فاکتور یافت شد")
+
+    # ------------------------------------------------------
+    # خروجی اکسل (پشتیبانی از تک، چند انتخابی و کل نتایج فیلتر شده)
+    # ------------------------------------------------------
+    def export_to_excel(self):
+        # بررسی ردیف‌های انتخاب‌شده
+        selected_rows = sorted({idx.row() for idx in self.reports_table.selectedIndexes()})
+
+        if selected_rows:
+            selected_ids = []
+            for row in selected_rows:
+                item = self.reports_table.item(row, 0)
+                if item:
+                    oid = item.data(Qt.ItemDataRole.UserRole)
+                    if oid is not None:
+                        selected_ids.append(oid)
+            
+            selected_id_set = set(selected_ids)
+            orders_to_export = [o for o in self.filtered_orders if o["id"] in selected_id_set]
+        else:
+            orders_to_export = list(self.filtered_orders)
+
+        if not orders_to_export:
+            QMessageBox.information(
+                self,
+                "عدم وجود داده",
+                "هیچ فاکتوری برای دریافت خروجی اکسل در لیست فیلترشده موجود نیست."
+            )
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "ذخیره خروجی اکسل فاکتورها",
+            "گزارش_فاکتورها.xlsx",
+            "Excel Files (*.xlsx)"
+        )
+
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".xlsx"):
+            file_path += ".xlsx"
+
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            QMessageBox.critical(
+                self,
+                "نیاز به نصب کتابخانه",
+                "برای تهیه خروجی اکسل، کتابخانه openpyxl لازم است.\nلطفاً دستور زیر را در ترمینال اجرا کنید:\npip install openpyxl"
+            )
+            return
+
+        session = None
+        try:
+            session = init_db()
+            target_ids = [o["id"] for o in orders_to_export]
+
+            db_orders = (
+                session.query(OrderArchive)
+                .filter(OrderArchive.id.in_(target_ids))
+                .all()
+            )
+
+            # مرتب‌سازی مطابق با ترتیب جدول
+            order_map = {order.id: order for order in db_orders}
+            sorted_orders = [order_map[oid] for oid in target_ids if oid in order_map]
+
+            if not sorted_orders:
+                QMessageBox.warning(self, "خطا", "اطلاعات فاکتورهای انتخاب‌شده یافت نشد.")
+                return
+
+            wb = Workbook()
+
+            # شیت اول: لیست فاکتورها
+            ws_orders = wb.active
+            ws_orders.title = "فاکتورها"
+            ws_orders.append([
+                "شماره فاکتور",
+                "تاریخ ثبت",
+                "ساعت ثبت",
+                "نام مشتری",
+                "ثبت‌کننده",
+                "تعداد اقلام",
+                "مبلغ کل (تومان)",
+                "وضعیت پرداخت"
+            ])
+
+            # شیت دوم: ریز اقلام
+            ws_items = wb.create_sheet(title="اقلام فاکتورها")
+            ws_items.append([
+                "شماره فاکتور",
+                "تاریخ ثبت",
+                "نام مشتری",
+                "نام محصول",
+                "تعداد",
+                "قیمت واحد (تومان)",
+                "جمع ردیف (تومان)",
+                "دستور تهیه و مواد مصرفی"
+            ])
+
+            for order in sorted_orders:
+                f_num = order.factor_number or ""
+                p_date = order.persian_date or ""
+                p_time = order.persian_time or ""
+                c_name = customer_text(order.customer_name)
+                p_by = order.performed_by or "نامشخص"
+
+                ws_orders.append([
+                    f_num,
+                    p_date,
+                    p_time,
+                    c_name,
+                    p_by,
+                    int(order.total_items_count or 0),
+                    float(order.total_price or 0),
+                    "پرداخت‌شده" if order.is_paid else "پرداخت‌نشده"
+                ])
+
+                for item in order.items:
+                    ws_items.append([
+                        f_num,
+                        p_date,
+                        c_name,
+                        item.menu_item_name or "",
+                        int(item.quantity or 0),
+                        float(item.unit_price or 0),
+                        float(item.subtotal or 0),
+                        item.recipe_snapshot_details or "—"
+                    ])
+
+            # استایل‌دهی و قالب‌بندی شیت‌ها
+            def style_sheet(ws, col_widths, currency_cols=()):
+                ws.sheet_view.rightToLeft = True
+                ws.freeze_panes = "A2"
+                ws.auto_filter.ref = ws.dimensions
+                ws.row_dimensions[1].height = 28
+
+                header_fill = PatternFill(start_color="28745A", end_color="28745A", fill_type="solid")
+                header_font = Font(name="Vazirmatn", size=11, bold=True, color="FFFFFF")
+                body_font = Font(name="Vazirmatn", size=10)
+
+                for cell in ws[1]:
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+                for row in ws.iter_rows(min_row=2):
+                    for cell in row:
+                        cell.font = body_font
+                        cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+
+                    for col_idx in currency_cols:
+                        row[col_idx - 1].number_format = '#,##0'
+
+                for idx, w in enumerate(col_widths, start=1):
+                    ws.column_dimensions[get_column_letter(idx)].width = w
+
+            style_sheet(
+                ws_orders,
+                col_widths=[20, 16, 12, 26, 20, 14, 22, 18],
+                currency_cols=(7,)
+            )
+
+            style_sheet(
+                ws_items,
+                col_widths=[20, 16, 26, 28, 12, 20, 20, 55],
+                currency_cols=(6, 7)
+            )
+
+            wb.save(file_path)
+
+            QMessageBox.information(
+                self,
+                "خروجی با موفقیت ذخیره شد",
+                f"فایل اکسل شامل {format_number(len(sorted_orders))} فاکتور با موفقیت ذخیره شد:\n{file_path}"
+            )
+
+        except SQLAlchemyError as error:
+            QMessageBox.critical(self, "خطا در دیتابیس", f"خطایی در خواندن جزئیات فاکتورها رخ داد:\n{error}")
+        except Exception as error:
+            QMessageBox.critical(self, "خطا در ساخت اکسل", f"ساخت خروجی با خطا مواجه شد:\n{error}")
+        finally:
+            if session:
+                session.close()
 
     # ------------------------------------------------------
     # آمار کارت‌ها

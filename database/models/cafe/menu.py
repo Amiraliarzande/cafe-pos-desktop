@@ -21,6 +21,8 @@ class MenuItem(Base):
     name = Column(String(200), nullable=False)
     sale_price = Column(Float, nullable=False)
     image_path = Column(String(500), nullable=True)
+
+    description = Column(String(500), nullable=True)
     
     category_id = Column(Integer, ForeignKey('menu_categories.id'), nullable=True)
     category = relationship("MenuCategory", back_populates="items")
@@ -43,3 +45,4 @@ class RecipeItem(Base):
     warehouse_product = relationship("Product")
 
     required_amount = Column(Float, nullable=False)
+    

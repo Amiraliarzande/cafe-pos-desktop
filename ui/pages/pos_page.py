@@ -3,15 +3,19 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -144,6 +148,170 @@ QScrollArea {
 
 
 # =========================================================
+# دیالوگ اختصاصی و مدرن انتخاب مشتری (با جستجو و کوئری زنده)
+# =========================================================
+
+class CustomerSelectDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("انتخاب و جست‌وجوی مشتری")
+        self.resize(520, 560)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setStyleSheet(PAGE_STYLESHEET)
+
+        self.selected_customer = None  # None یعنی مشتری آزاد/عمومی
+        self.raw_customers = []
+
+        self._build_ui()
+        self._fetch_fresh_customers()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        header_lbl = QLabel("انتخاب مشتری برای فاکتور")
+        header_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #0F172A;")
+        layout.addWidget(header_lbl)
+
+        # ردیف دکمه مشتری عمومی (آزاد)
+        guest_btn = QPushButton("👤 مشتری عمومی (گذری / ناشناس)")
+        guest_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        guest_btn.setMinimumHeight(38)
+        guest_btn.setStyleSheet("""
+            QPushButton {
+                background: #F1F5F9;
+                border: 1px dashed #94A3B8;
+                color: #334155;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #E2E8F0;
+                border-color: #64748B;
+            }
+        """)
+        guest_btn.clicked.connect(self._select_guest)
+        layout.addWidget(guest_btn)
+
+        # فیلد سرچ زنده
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍 جست‌وجو بر اساس نام یا شماره تلفن مشتری...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumHeight(38)
+        self.search_input.textChanged.connect(self._filter_customers)
+        layout.addWidget(self.search_input)
+
+        # جدول لیست مشتریان
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["شناسه", "نام مشتری", "شماره تماس"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                background: #FFFFFF;
+                gridline-color: #F1F5F9;
+            }
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QTableWidget::item:selected {
+                background-color: #E8F4F1;
+                color: #1F5E48;
+                font-weight: 700;
+            }
+        """)
+        self.table.cellDoubleClicked.connect(lambda r, c: self._confirm_selection())
+        layout.addWidget(self.table, 1)
+
+        # دکمه‌های تایید و انصراف
+        actions = QHBoxLayout()
+        confirm_btn = QPushButton("انتخاب مشتری")
+        confirm_btn.setProperty("class", "primaryBtn")
+        confirm_btn.setMinimumHeight(38)
+        confirm_btn.clicked.connect(self._confirm_selection)
+
+        cancel_btn = QPushButton("انصراف")
+        cancel_btn.setMinimumHeight(38)
+        cancel_btn.clicked.connect(self.reject)
+
+        actions.addWidget(confirm_btn)
+        actions.addWidget(cancel_btn)
+        layout.addLayout(actions)
+
+    def _fetch_fresh_customers(self):
+        """اجرای کوئری مستقیم و تازه به دیتابیس در لحظه باز شدن پنجره"""
+        session = init_db()
+        try:
+            session.expire_all()
+            customers = session.query(Customer).order_by(Customer.name.asc()).all()
+            self.raw_customers = [
+                {
+                    "id": c.id,
+                    "name": c.name or "بی‌نام",
+                    "phone": getattr(c, "phone", "") or ""
+                }
+                for c in customers
+            ]
+            self._render_table(self.raw_customers)
+        except SQLAlchemyError as err:
+            QMessageBox.warning(self, "خطا در دریافت مشتریان", f"خطا در ارتباط با دیتابیس:\n{err}")
+        finally:
+            session.close()
+
+    def _render_table(self, items):
+        self.table.setRowCount(len(items))
+        for row, c in enumerate(items):
+            id_item = QTableWidgetItem(to_persian_digits(str(c["id"])))
+            id_item.setData(Qt.ItemDataRole.UserRole, c)
+            id_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            name_item = QTableWidgetItem(c["name"])
+            phone_item = QTableWidgetItem(to_persian_digits(c["phone"]) if c["phone"] else "-")
+            phone_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            self.table.setItem(row, 0, id_item)
+            self.table.setItem(row, 1, name_item)
+            self.table.setItem(row, 2, phone_item)
+
+        if items:
+            self.table.selectRow(0)
+
+    def _filter_customers(self, query):
+        q = query.strip().casefold()
+        if not q:
+            self._render_table(self.raw_customers)
+            return
+
+        filtered = [
+            c for c in self.raw_customers
+            if q in c["name"].casefold() or q in str(c["phone"]).casefold()
+        ]
+        self._render_table(filtered)
+
+    def _select_guest(self):
+        self.selected_customer = None
+        self.accept()
+
+    def _confirm_selection(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "انتخاب مشتری", "لطفاً ابتدا یک مشتری را از جدول انتخاب کنید.")
+            return
+
+        item = self.table.item(row, 0)
+        self.selected_customer = item.data(Qt.ItemDataRole.UserRole)
+        self.accept()
+
+
+# =========================================================
 # کارت آیتم در کاتالوگ فروش (ProductCard)
 # =========================================================
 
@@ -160,7 +328,6 @@ class ProductCard(QPushButton):
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # دایره پس‌زمینه ایموجی
         emoji_badge = QLabel(product["emoji"])
         emoji_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         emoji_badge.setFixedSize(48, 48)
@@ -229,7 +396,6 @@ class CartRow(QFrame):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        # جزئیات عنوان و قیمت
         details = QVBoxLayout()
         details.setSpacing(3)
 
@@ -248,7 +414,6 @@ class CartRow(QFrame):
         details.addWidget(subtotal)
         layout.addLayout(details, 1)
 
-        # کنترل‌های تعداد (- / + / سطل زباله)
         qty_box = QVBoxLayout()
         qty_box.setSpacing(6)
         qty_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -338,15 +503,18 @@ class PosPage(QWidget):
         self.cart = {}
         self.products = []
         self.categories = []
-        self.customers = []
         self.active_category_id = None
         self.category_buttons = {}
+
+        # وضعیت مشتری انتخاب‌شده: None = مشتری عمومی
+        self.selected_customer_id = None
+        self.selected_customer_name = "مشتری عمومی (آزاد / گذری)"
 
         self.setStyleSheet(PAGE_STYLESHEET)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self._build_ui()
-        self.load_all_data()
+        self.load_catalog()
 
     def _build_ui(self):
         root = QHBoxLayout(self)
@@ -354,7 +522,7 @@ class PosPage(QWidget):
         root.setSpacing(14)
 
         # -------------------------------------------------
-        # ۱. پنل کاتالوگ محصولات (سمت راست در RTL)
+        # ۱. پنل کاتالوگ محصولات
         # -------------------------------------------------
         catalog_panel = QFrame()
         catalog_panel.setProperty("class", "cardPanel")
@@ -362,7 +530,6 @@ class PosPage(QWidget):
         catalog_layout.setContentsMargins(16, 14, 16, 14)
         catalog_layout.setSpacing(12)
 
-        # هدر کاتالوگ + دکمه رفرش زنده
         cat_header = QHBoxLayout()
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
@@ -379,14 +546,14 @@ class PosPage(QWidget):
         cat_header.addStretch()
 
         self.refresh_btn = QPushButton("🔄 به‌روزرسانی منو")
-        self.refresh_btn.setToolTip("بارگذاری آخرین محصولات و مشتریان از دیتابیس")
+        self.refresh_btn.setToolTip("بارگذاری آخرین محصولات از دیتابیس")
         self.refresh_btn.setMinimumHeight(34)
-        self.refresh_btn.clicked.connect(self.load_all_data)
+        self.refresh_btn.clicked.connect(self.load_catalog)
         cat_header.addWidget(self.refresh_btn)
 
         catalog_layout.addLayout(cat_header)
 
-        # ردیف جستجو
+        # فیلد جستجو
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("🔍 جست‌وجوی سریع نام محصول منو...")
         self.search_input.setClearButtonEnabled(True)
@@ -394,7 +561,7 @@ class PosPage(QWidget):
         self.search_input.textChanged.connect(self.refresh_products)
         catalog_layout.addWidget(self.search_input)
 
-        # اسکرول دسته‌بندی‌ها (Pill bar)
+        # نوار دسته‌بندی‌ها
         cat_scroll = QScrollArea()
         cat_scroll.setWidgetResizable(True)
         cat_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -408,7 +575,7 @@ class PosPage(QWidget):
         cat_scroll.setWidget(self.category_container)
         catalog_layout.addWidget(cat_scroll)
 
-        # محفظه گرید کارت‌های محصول
+        # گرید محصولات
         self.products_scroll = QScrollArea()
         self.products_scroll.setWidgetResizable(True)
         self.products_scroll.setStyleSheet("background: #F8FAFC; border-radius: 10px; border: 1px solid #E2E8F0;")
@@ -424,7 +591,7 @@ class PosPage(QWidget):
         root.addWidget(catalog_panel, 1)
 
         # -------------------------------------------------
-        # ۲. پنل فاکتور و سبد خرید (سمت چپ در RTL)
+        # ۲. پنل فاکتور و سبد خرید
         # -------------------------------------------------
         cart_panel = QFrame()
         cart_panel.setProperty("class", "cardPanel")
@@ -455,7 +622,7 @@ class PosPage(QWidget):
         cart_header.addWidget(self.cart_badge)
         cart_layout.addLayout(cart_header)
 
-        # اسکرول آیتم‌های انتخابی سبد خرید
+        # اسکرول آیتم‌های سبد خرید
         self.cart_scroll = QScrollArea()
         self.cart_scroll.setWidgetResizable(True)
         self.cart_scroll.setStyleSheet("background: transparent; border: none;")
@@ -469,22 +636,51 @@ class PosPage(QWidget):
 
         cart_layout.addWidget(self.cart_scroll, 1)
 
-        # وضعیت سبد خالی
+        # سبد خالی
         self.empty_label = QLabel("سبد خرید شما خالی است.\nبرای شروع، از منو اقلام را انتخاب کنید.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("color: #94A3B8; font-size: 12px; padding: 24px;")
         cart_layout.addWidget(self.empty_label)
 
-        # فرم فاکتور (مشتری و پرداخت)
+        # فرم فاکتور (انتخاب زنده مشتری و نحوه پرداخت)
         meta_box = QVBoxLayout()
         meta_box.setSpacing(8)
 
-        lbl_cust = QLabel("مشتری:")
+        lbl_cust = QLabel("مشتری / طرف حساب:")
         lbl_cust.setStyleSheet("font-size: 12px; font-weight: 600; color: #475569;")
-        self.customer_combo = QComboBox()
-        self.customer_combo.setMinimumHeight(36)
         meta_box.addWidget(lbl_cust)
-        meta_box.addWidget(self.customer_combo)
+
+        # کادر نمایش مشتری انتخابی به همراه دکمه تغییر
+        cust_selector_frame = QFrame()
+        cust_selector_frame.setStyleSheet("background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 4px;")
+        cust_selector_layout = QHBoxLayout(cust_selector_frame)
+        cust_selector_layout.setContentsMargins(8, 4, 8, 4)
+
+        self.customer_label = QLabel(self.selected_customer_name)
+        self.customer_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A; border: none;")
+        cust_selector_layout.addWidget(self.customer_label, 1)
+
+        self.choose_customer_btn = QPushButton("تغییر / جستجو")
+        self.choose_customer_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.choose_customer_btn.setStyleSheet("""
+            QPushButton {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 12px;
+                color: #28745A;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background: #E8F4F1;
+                border-color: #28745A;
+            }
+        """)
+        self.choose_customer_btn.clicked.connect(self.open_customer_dialog)
+        cust_selector_layout.addWidget(self.choose_customer_btn)
+
+        meta_box.addWidget(cust_selector_frame)
 
         lbl_pay = QLabel("وضعیت پرداخت فاکتور:")
         lbl_pay.setStyleSheet("font-size: 12px; font-weight: 600; color: #475569;")
@@ -497,13 +693,13 @@ class PosPage(QWidget):
 
         cart_layout.addLayout(meta_box)
 
-        # خط جداکننده
+        # جداکننده
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("border-top: 1px dashed #CBD5E1; margin: 4px 0;")
         cart_layout.addWidget(sep)
 
-        # خلاصه محاسبات مالی
+        # جمع مبالغ
         summary_panel = QFrame()
         summary_panel.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 6px;")
         sum_layout = QVBoxLayout(summary_panel)
@@ -531,7 +727,7 @@ class PosPage(QWidget):
 
         cart_layout.addWidget(summary_panel)
 
-        # دکمه‌های اقدام سبد خرید
+        # دکمه‌های اقدام
         btn_box = QVBoxLayout()
         btn_box.setSpacing(6)
 
@@ -555,41 +751,27 @@ class PosPage(QWidget):
         root.addWidget(cart_panel)
 
     # ==================================================
-    # لود یکپارچه داده‌ها (با پشتیبانی از Refresh)
+    # باز کردن پنجره مودال انتخاب مشتری
     # ==================================================
 
-    def load_all_data(self):
-        """بازخوانی زنده مشتریان و کاتالوگ منو از پایگاه داده"""
-        self.load_customers()
-        self.load_catalog()
+    def open_customer_dialog(self):
+        """باز کردن پنجره دیالوگ مشتری با کوئری تازه به دیتابیس در همان لحظه"""
+        dialog = CustomerSelectDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            cust = dialog.selected_customer
+            if cust is None:
+                self.selected_customer_id = None
+                self.selected_customer_name = "مشتری عمومی (آزاد / گذری)"
+            else:
+                self.selected_customer_id = cust["id"]
+                phone_str = f" ({to_persian_digits(cust['phone'])})" if cust.get("phone") else ""
+                self.selected_customer_name = f"{cust['name']}{phone_str}"
 
-    def load_customers(self):
-        session = init_db()
-        try:
-            session.expire_all()
-            customers = session.query(Customer).order_by(Customer.name.asc()).all()
-            self.customers = [{"id": c.id, "name": c.name} for c in customers]
+            self.customer_label.setText(self.selected_customer_name)
 
-            curr_id = self.customer_combo.currentData()
-
-            self.customer_combo.blockSignals(True)
-            self.customer_combo.clear()
-            self.customer_combo.addItem("مشتری عمومی (آزاد / گذری)", None)
-
-            for c in self.customers:
-                self.customer_combo.addItem(c["name"], c["id"])
-
-            idx = self.customer_combo.findData(curr_id)
-            if idx >= 0:
-                self.customer_combo.setCurrentIndex(idx)
-
-            self.customer_combo.blockSignals(False)
-        except SQLAlchemyError as error:
-            self.customer_combo.clear()
-            self.customer_combo.addItem("مشتری عمومی (آزاد / گذری)", None)
-            QMessageBox.warning(self, "خطا در بارگذاری مشتریان", f"خطا در خواندن مشتریان:\n{error}")
-        finally:
-            session.close()
+    # ==================================================
+    # لود کاتالوگ محصولات
+    # ==================================================
 
     def load_catalog(self):
         session = init_db()
@@ -798,9 +980,9 @@ class PosPage(QWidget):
             QMessageBox.information(self, "سبد خالی", "ابتدا یک یا چند محصول را به سبد خرید اضافه کنید.")
             return
 
-        customer_id = self.customer_combo.currentData()
+        customer_id = self.selected_customer_id
+        customer_name = self.selected_customer_name
         is_paid = self.payment_combo.currentData()
-        customer_name = self.customer_combo.currentText()
         payment_text = "پرداخت‌شده" if is_paid else "پرداخت‌نشده (دفتری)"
         total_qty = sum(i["quantity"] for i in self.cart.values())
 
@@ -847,9 +1029,12 @@ class PosPage(QWidget):
             fac_num = to_persian_digits(str(result["factor_number"]))
             final_price = money(result["total_price"])
 
+            # ریست سبد و وضعیت مشتری پس از ثبت موفق
             self.cart.clear()
             self.refresh_cart()
-            self.customer_combo.setCurrentIndex(0)
+            self.selected_customer_id = None
+            self.selected_customer_name = "مشتری عمومی (آزاد / گذری)"
+            self.customer_label.setText(self.selected_customer_name)
             self.payment_combo.setCurrentIndex(0)
 
             QMessageBox.information(

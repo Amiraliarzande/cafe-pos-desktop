@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
 from sqlalchemy.exc import SQLAlchemyError
 
 from database.db import init_db
@@ -142,7 +144,7 @@ QGroupBox::title {
 }
 
 /* ورودی‌ها */
-QLineEdit, QComboBox, QDoubleSpinBox {
+QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit {
     background-color: #F8FAFC;
     border: 1px solid #CBD5E1;
     border-radius: 8px;
@@ -150,7 +152,7 @@ QLineEdit, QComboBox, QDoubleSpinBox {
     font-size: 13px;
     color: #0F172A;
 }
-QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus {
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
     border: 1px solid #28745A;
     background-color: #FFFFFF;
 }
@@ -362,7 +364,7 @@ class MenuCategoryDialog(QDialog):
 
 
 # =========================================================
-# فرم ایجاد و ویرایش آیتم منو
+# فرم ایجاد و ویرایش آیتم منو (شامل فیلد نحوه سرو)
 # =========================================================
 
 class MenuItemDialog(QDialog):
@@ -373,7 +375,7 @@ class MenuItemDialog(QDialog):
         self.db = db
 
         self.setWindowTitle("ویرایش آیتم منو" if item else "افزودن آیتم جدید به منو")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(480)
         self.setStyleSheet(PAGE_STYLESHEET)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
@@ -381,6 +383,7 @@ class MenuItemDialog(QDialog):
         layout.setSpacing(14)
         layout.setContentsMargins(20, 20, 20, 20)
 
+        # نام آیتم
         lbl_name = QLabel("نام آیتم منو:")
         lbl_name.setStyleSheet("font-weight: 600; color: #475569;")
         self.name_input = QLineEdit()
@@ -389,6 +392,7 @@ class MenuItemDialog(QDialog):
         layout.addWidget(lbl_name)
         layout.addWidget(self.name_input)
 
+        # قیمت فروش
         lbl_price = QLabel("قیمت فروش (تومان):")
         lbl_price.setStyleSheet("font-weight: 600; color: #475569;")
         self.price_input = QDoubleSpinBox()
@@ -400,6 +404,7 @@ class MenuItemDialog(QDialog):
         layout.addWidget(lbl_price)
         layout.addWidget(self.price_input)
 
+        # دسته‌بندی
         lbl_cat = QLabel("دسته‌بندی:")
         lbl_cat.setStyleSheet("font-weight: 600; color: #475569;")
         layout.addWidget(lbl_cat)
@@ -419,11 +424,25 @@ class MenuItemDialog(QDialog):
         cat_layout.addWidget(self.add_category_button)
         layout.addLayout(cat_layout)
 
+        # توضیحات نحوه سرو کردن
+        lbl_desc = QLabel("توضیحات و نحوه سرو (اختیاری):")
+        lbl_desc.setStyleSheet("font-weight: 600; color: #475569;")
+        layout.addWidget(lbl_desc)
+
+        self.description_input = QTextEdit()
+        self.description_input.setPlaceholderText("مثلاً: همراه با یک برش لیمو و یخ سرو شود؛ سس شکلات در ظرف جداگانه ارائه گردد...")
+        self.description_input.setMinimumHeight(75)
+        self.description_input.setMaximumHeight(110)
+        self.description_input.setAcceptRichText(False)
+        self.description_input.setTabChangesFocus(True)
+        layout.addWidget(self.description_input)
+
         hint = QLabel("💡 مواد اولیه و دستور پخت را می‌توانید بعد از ثبت از بخش «دستور تهیه» تکمیل کنید.")
         hint.setStyleSheet("color: #64748B; font-size: 11px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
+        # دکمه‌ها
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
 
@@ -441,9 +460,11 @@ class MenuItemDialog(QDialog):
         buttons.addWidget(save_button)
         layout.addLayout(buttons)
 
+        # در صورت ویرایش، مقادیر قبلی پر می‌شوند
         if item:
-            self.name_input.setText(item.name)
-            self.price_input.setValue(float(item.sale_price))
+            self.name_input.setText(item.name or "")
+            self.price_input.setValue(float(item.sale_price or 0))
+            self.description_input.setPlainText(item.description or "")
             idx = self.category_combo.findData(item.category_id)
             if idx >= 0:
                 self.category_combo.setCurrentIndex(idx)
@@ -483,10 +504,12 @@ class MenuItemDialog(QDialog):
             QMessageBox.critical(self, "خطا در ایجاد دسته‌بندی", str(error))
 
     def get_data(self):
+        desc = self.description_input.toPlainText().strip()
         return {
             "name": self.name_input.text().strip(),
             "sale_price": self.price_input.value(),
             "category_id": self.category_combo.currentData(),
+            "description": desc if desc else None,
         }
 
     def accept(self):
@@ -500,7 +523,80 @@ class MenuItemDialog(QDialog):
             self.price_input.setFocus()
             return
 
+        desc = self.description_input.toPlainText().strip()
+        if len(desc) > 500:
+            QMessageBox.warning(self, "توضیحات طولانی", "توضیحات نحوه سرو نمی‌تواند بیش از ۵۰۰ کاراکتر باشد.")
+            self.description_input.setFocus()
+            return
+
         super().accept()
+
+
+# =========================================================
+# دیالوگ نمایش جزئیات آیتم (Read-Only)
+# =========================================================
+
+class MenuItemDetailsDialog(QDialog):
+    def __init__(self, parent=None, item: MenuItem = None):
+        super().__init__(parent)
+        self.item = item
+        self.setWindowTitle(f"جزئیات آیتم: {item.name if item else ''}")
+        self.setMinimumWidth(520)
+        self.setStyleSheet(PAGE_STYLESHEET)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # نام
+        lbl_name = QLabel("نام آیتم منو:")
+        lbl_name.setStyleSheet("font-weight: 600; color: #475569;")
+        name_val = QLineEdit(item.name if item else "")
+        name_val.setReadOnly(True)
+        name_val.setMinimumHeight(38)
+        layout.addWidget(lbl_name)
+        layout.addWidget(name_val)
+
+        # قیمت
+        lbl_price = QLabel("قیمت فروش (تومان):")
+        lbl_price.setStyleSheet("font-weight: 600; color: #475569;")
+        price_val = QLineEdit(format_price(item.sale_price if item else 0))
+        price_val.setReadOnly(True)
+        price_val.setMinimumHeight(38)
+        layout.addWidget(lbl_price)
+        layout.addWidget(price_val)
+
+        # دسته‌بندی
+        lbl_cat = QLabel("دسته‌بندی:")
+        lbl_cat.setStyleSheet("font-weight: 600; color: #475569;")
+        cat_name = item.category.name if (item and item.category) else "بدون دسته‌بندی"
+        cat_val = QLineEdit(cat_name)
+        cat_val.setReadOnly(True)
+        cat_val.setMinimumHeight(38)
+        layout.addWidget(lbl_cat)
+        layout.addWidget(cat_val)
+
+        # توضیحات و نحوه سرو
+        lbl_desc = QLabel("توضیحات و نحوه سرو:")
+        lbl_desc.setStyleSheet("font-weight: 600; color: #475569;")
+        layout.addWidget(lbl_desc)
+
+        desc_val = QTextEdit()
+        desc_val.setReadOnly(True)
+        desc_val.setAcceptRichText(False)
+        desc_val.setMinimumHeight(110)
+        desc_val.setPlainText(item.description or "—")
+        layout.addWidget(desc_val)
+
+        # دکمه‌ها
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        close_btn = QPushButton("بستن")
+        close_btn.setMinimumHeight(36)
+        close_btn.clicked.connect(self.accept)
+        buttons.addWidget(close_btn)
+        layout.addLayout(buttons)
 
 
 # =========================================================
@@ -866,7 +962,7 @@ class MenuPage(QWidget):
         lbl_s = QLabel("جست‌وجو:")
         lbl_s.setStyleSheet("font-weight: 600; color: #475569;")
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("نام آیتم منو را جست‌وجو کنید...")
+        self.search_input.setPlaceholderText("نام یا توضیحات آیتم منو را جست‌وجو کنید...")
         self.search_input.setMinimumHeight(36)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self.refresh_table)
@@ -921,12 +1017,19 @@ class MenuPage(QWidget):
 
         row2.addStretch()
 
+        # دکمه‌های عملیاتی آیتم
         self.recipe_button = QPushButton("📋 دستور تهیه و مواد اولیه")
         self.recipe_button.setProperty("class", "infoBtn")
         self.recipe_button.setMinimumHeight(32)
         self.recipe_button.setEnabled(False)
         self.recipe_button.clicked.connect(self.open_recipe)
         row2.addWidget(self.recipe_button)
+
+        self.detail_item_button = QPushButton("جزئیات آیتم")
+        self.detail_item_button.setMinimumHeight(32)
+        self.detail_item_button.setEnabled(False)
+        self.detail_item_button.clicked.connect(self.show_item_details)
+        row2.addWidget(self.detail_item_button)
 
         self.edit_item_button = QPushButton("ویرایش آیتم")
         self.edit_item_button.setMinimumHeight(32)
@@ -945,24 +1048,25 @@ class MenuPage(QWidget):
         root.addWidget(toolbar_panel)
 
         # -------------------------------------------------
-        # ۳. پنل جدول آیتم‌ها
+        # ۳. پنل جدول آیتم‌ها (ستون نحوه سرو اضافه شد)
         # -------------------------------------------------
         table_panel = QFrame()
         table_panel.setProperty("class", "cardPanel")
         table_layout = QVBoxLayout(table_panel)
-        table_layout.setContentsMargins(0, 0, 0, 12)
+        table_layout.setContentsMargins(0, 0, 12, 12)
         table_layout.setSpacing(0)
 
         inner = QVBoxLayout()
         inner.setContentsMargins(14, 14, 14, 0)
         inner.setSpacing(10)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels([
             "شناسه",
             "نام آیتم منو",
             "دسته‌بندی",
             "قیمت فروش (تومان)",
+            "نحوه سرو",
             "دستور تهیه (رسپی)",
         ])
         self.table.setColumnHidden(0, True)
@@ -975,10 +1079,11 @@ class MenuPage(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(44)
 
         header_view = self.table.horizontalHeader()
-        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
         self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
         self.table.itemDoubleClicked.connect(lambda _: self.edit_menu_item())
@@ -1005,6 +1110,7 @@ class MenuPage(QWidget):
         self.edit_item_button.setEnabled(has_sel)
         self.delete_item_button.setEnabled(has_sel)
         self.recipe_button.setEnabled(has_sel)
+        self.detail_item_button.setEnabled(has_sel)
 
     def load_categories(self):
         current_cat_id = self.category_filter.currentData()
@@ -1069,7 +1175,7 @@ class MenuPage(QWidget):
                 .first()
             )
             if duplicate:
-                QMessageBox.warning(self, "نام تکراری", "دسته‌بندی دیگری با این نام وجود دارد.")
+                QMessageBox.warning(self, "نام تکراری", "দسته‌بندی دیگری با این نام وجود دارد.")
                 return
 
             category.name = name
@@ -1123,6 +1229,7 @@ class MenuPage(QWidget):
                 name=data["name"],
                 sale_price=data["sale_price"],
                 category_id=data["category_id"],
+                description=data["description"],
             )
             self.db.add(item)
             self.db.commit()
@@ -1149,6 +1256,15 @@ class MenuPage(QWidget):
 
         return self.db.query(MenuItem).filter(MenuItem.id == item_id).first()
 
+    def show_item_details(self):
+        item = self.get_selected_menu_item()
+        if item is None:
+            QMessageBox.information(self, "انتخاب آیتم", "لطفاً یک آیتم را از جدول انتخاب کنید.")
+            return
+
+        dlg = MenuItemDetailsDialog(self, item=item)
+        dlg.exec()
+
     def edit_menu_item(self):
         item = self.get_selected_menu_item()
         if item is None:
@@ -1165,6 +1281,7 @@ class MenuPage(QWidget):
             item.name = data["name"]
             item.sale_price = data["sale_price"]
             item.category_id = data["category_id"]
+            item.description = data["description"]
             self.db.commit()
 
             self.refresh_table()
@@ -1218,7 +1335,10 @@ class MenuPage(QWidget):
 
             search_text = self.search_input.text().strip()
             if search_text:
-                query = query.filter(MenuItem.name.ilike(f"%{search_text}%"))
+                query = query.filter(
+                    (MenuItem.name.ilike(f"%{search_text}%")) |
+                    (MenuItem.description.ilike(f"%{search_text}%"))
+                )
 
             cat_id = self.category_filter.currentData()
             if cat_id is not None:
@@ -1248,14 +1368,17 @@ class MenuPage(QWidget):
                 row = self.table.rowCount()
                 self.table.insertRow(row)
 
+                # ۰. شناسه (مخفی)
                 id_item = QTableWidgetItem(str(item.id))
                 id_item.setData(Qt.ItemDataRole.UserRole, item.id)
                 self.table.setItem(row, 0, id_item)
 
+                # ۱. نام آیتم منو
                 name_item = QTableWidgetItem(item.name)
                 name_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, 1, name_item)
 
+                # ۲. دسته‌بندی
                 cat_name = item.category.name if item.category else "بدون دسته‌بندی"
                 cat_item = QTableWidgetItem(cat_name)
                 cat_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1263,10 +1386,22 @@ class MenuPage(QWidget):
                     cat_item.setForeground(Qt.GlobalColor.darkGray)
                 self.table.setItem(row, 2, cat_item)
 
+                # ۳. قیمت فروش
                 price_item = QTableWidgetItem(format_price(item.sale_price))
                 price_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row, 3, price_item)
 
+                # ۴. توضیحات و نحوه سرو
+                desc_text = item.description.strip() if item.description else "—"
+                desc_item = QTableWidgetItem(desc_text)
+                desc_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if item.description:
+                    desc_item.setToolTip(item.description)
+                else:
+                    desc_item.setForeground(Qt.GlobalColor.darkGray)
+                self.table.setItem(row, 4, desc_item)
+
+                # ۵. وضعیت دستور تهیه
                 recipe_count = (
                     self.db.query(RecipeItem)
                     .filter(RecipeItem.menu_item_id == item.id)
@@ -1277,7 +1412,7 @@ class MenuPage(QWidget):
                 b_layout.setContentsMargins(0, 0, 0, 0)
                 b_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 b_layout.addWidget(RecipeBadge(recipe_count))
-                self.table.setCellWidget(row, 4, badge_widget)
+                self.table.setCellWidget(row, 5, badge_widget)
 
             self.table.blockSignals(False)
             self.status_label.setText(f"تعداد آیتم‌های نمایش‌داده‌شده: {to_persian_digits(str(len(items)))}")
